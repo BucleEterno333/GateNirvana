@@ -1,8 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { faker } = require('@faker-js/faker');
+
+// Usar stealth para evitar detección
+puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
@@ -16,13 +20,13 @@ const HEADLESS = process.env.HEADLESS === 'false' ? false :
 
 let browser = null;
 
-// ========== FUNCIÓN PARA ESPERAR SELECTOR ==========
-async function waitForSelector(page, selector, timeout = 15000) {
+// ========== FUNCIÓN PARA ESPERAR SELECTOR CON TIMEOUT EXTENDIDO ==========
+async function waitForSelector(page, selector, timeout = 60000) {
     try {
         await page.waitForSelector(selector, { timeout, visible: true });
         return true;
     } catch (e) {
-        console.log(`⏳ Selector no encontrado: ${selector}`);
+        console.log(`⏳ Selector no encontrado (${timeout}ms): ${selector}`);
         return false;
     }
 }
@@ -42,7 +46,7 @@ function parseProxy(proxyStr) {
     return null;
 }
 
-// ========== CREAR PÁGINA CON PROXY ==========
+// ========== CREAR PÁGINA CON PROXY Y HEADERS COMPLETOS ==========
 async function getNewPage() {
     if (browser) {
         await browser.close();
@@ -55,7 +59,9 @@ async function getNewPage() {
         '--disable-gpu',
         '--disable-software-rasterizer',
         '--ignore-certificate-errors',
-        '--disable-features=IsolateOrigins,site-per-process'
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-web-security',
+        '--disable-features=BlockInsecurePrivateNetworkRequests'
     ];
 
     if (proxyData) {
@@ -70,7 +76,7 @@ async function getNewPage() {
         headless: HEADLESS,
         args: args,
         ignoreHTTPSErrors: true,
-        timeout: 60000
+        timeout: 120000 // 2 minutos para lanzar
     };
 
     try {
@@ -81,7 +87,33 @@ async function getNewPage() {
     }
 
     const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
+
+    // Viewport realista
+    await page.setViewport({
+        width: 1366,
+        height: 768,
+        deviceScaleFactor: 1,
+        hasTouch: false,
+        isLandscape: true,
+        isMobile: false
+    });
+
+    // Headers completos
+    await page.setExtraHTTPHeaders({
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Language': 'es-US,es;q=0.9,en;q=0.8',
+        'Cache-Control': 'max-age=0',
+        'Connection': 'keep-alive',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    });
+
+    // User-Agent adicional (ya lo ponemos en headers, pero también en el navegador)
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
     if (proxyData) {
@@ -116,9 +148,9 @@ async function llenarDireccion(page, direccion) {
     await page.type(firstNameSel, direccion.firstName);
 
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
 
     await page.keyboard.down('Shift');
     await page.keyboard.press('End');
@@ -127,7 +159,7 @@ async function llenarDireccion(page, direccion) {
     await page.type('input[placeholder="Last Name"]', direccion.lastName);
 
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
     await page.keyboard.down('Shift');
     await page.keyboard.press('End');
     await page.keyboard.up('Shift');
@@ -135,7 +167,7 @@ async function llenarDireccion(page, direccion) {
     await page.type('input[placeholder="Email Address"]', direccion.email);
 
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
     await page.keyboard.down('Shift');
     await page.keyboard.press('End');
     await page.keyboard.up('Shift');
@@ -143,9 +175,9 @@ async function llenarDireccion(page, direccion) {
     await page.type('input[placeholder="Address Line 1"]', direccion.street);
 
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
     await page.keyboard.down('Shift');
     await page.keyboard.press('End');
     await page.keyboard.up('Shift');
@@ -153,9 +185,9 @@ async function llenarDireccion(page, direccion) {
     await page.type('input[placeholder="City"]', direccion.city);
 
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
     await page.keyboard.press('Tab');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
 
     await page.type('input[placeholder="Zip"]', direccion.zip);
     console.log('✅ Dirección llenada');
@@ -167,6 +199,9 @@ async function rellenarDatosTarjeta(page, numero, expira, cvv) {
         throw new Error('La página no está definida en rellenarDatosTarjeta');
     }
     console.log('🔄 Rellenando tarjeta...');
+    
+    // Esperar a que el iframe o los campos aparezcan (hasta 30 segundos)
+    await page.waitForTimeout(3000);
     
     const frames = page.frames();
     let cardFrame = null;
@@ -181,26 +216,37 @@ async function rellenarDatosTarjeta(page, numero, expira, cvv) {
             }
         } catch (e) {}
     }
+    // Si no se encuentra, buscar por nombre de frame (Stripe, Braintree, etc.)
+    if (!cardFrame) {
+        for (const f of frames) {
+            const url = f.url();
+            if (url.includes('stripe') || url.includes('braintree') || url.includes('payment') || url.includes('checkout')) {
+                cardFrame = f;
+                break;
+            }
+        }
+    }
     const target = cardFrame || page;
+    console.log(`📦 Frame de pago: ${cardFrame ? 'encontrado' : 'no encontrado, usando página principal'}`);
 
-    const numSel = 'input.cc-input, input[placeholder*="Card Number"]';
-    if (await waitForSelector(target, numSel, 5000)) {
+    const numSel = 'input.cc-input, input[placeholder*="Card Number"], input[data-elements-stable-field-name="cardNumber"], input[name="cardnumber"]';
+    if (await waitForSelector(target, numSel, 30000)) {
         await target.click(numSel, { clickCount: 3 });
         await target.type(numSel, numero);
     } else {
         throw new Error('Campo número no encontrado');
     }
 
-    const expSel = 'input.exp-input, input[placeholder*="MM/YY"]';
-    if (await waitForSelector(target, expSel, 5000)) {
+    const expSel = 'input.exp-input, input[placeholder*="MM/YY"], input[data-elements-stable-field-name="cardExpiry"], input[name="expiry"]';
+    if (await waitForSelector(target, expSel, 30000)) {
         await target.click(expSel, { clickCount: 3 });
         await target.type(expSel, expira);
     } else {
         throw new Error('Campo fecha no encontrado');
     }
 
-    const cvvSel = 'input.cvv-input, input[placeholder*="CVV"]';
-    if (await waitForSelector(target, cvvSel, 5000)) {
+    const cvvSel = 'input.cvv-input, input[placeholder*="CVV"], input[data-elements-stable-field-name="cardCvc"], input[name="cvv"]';
+    if (await waitForSelector(target, cvvSel, 30000)) {
         await target.click(cvvSel, { clickCount: 3 });
         await target.type(cvvSel, cvv);
     } else {
@@ -209,7 +255,65 @@ async function rellenarDatosTarjeta(page, numero, expira, cvv) {
     console.log('✅ Tarjeta ingresada');
 }
 
-// ========== VERIFICAR UNA TARJETA (para endpoint individual) ==========
+// ========== FUNCIÓN PARA RESOLVER CAPTCHA (TURNSTILE / RECAPTCHA) ==========
+async function resolverCaptcha(page) {
+    console.log('🔍 Buscando captcha (Turnstile/reCAPTCHA)...');
+    
+    // Esperar a que cargue cualquier iframe de captcha
+    await page.waitForTimeout(5000);
+    
+    // Buscar en todos los frames
+    const frames = page.frames();
+    let captchaFrame = null;
+    for (const f of frames) {
+        const url = f.url();
+        if (url.includes('turnstile') || url.includes('recaptcha') || url.includes('captcha')) {
+            captchaFrame = f;
+            break;
+        }
+    }
+    
+    if (!captchaFrame) {
+        // Buscar el checkbox directamente en la página (a veces está en el DOM principal)
+        const checkbox = await page.$('input[type="checkbox"][aria-label="Verifique que es un ser humano"]');
+        if (checkbox) {
+            console.log('✅ Captcha checkbox encontrado en DOM principal, haciendo clic...');
+            await checkbox.click();
+            await page.waitForTimeout(5000);
+            return true;
+        }
+        console.log('⚠️ No se encontró captcha');
+        return false;
+    }
+    
+    console.log('✅ Captcha iframe encontrado, intentando resolver...');
+    try {
+        // Intentar hacer clic en el checkbox dentro del iframe
+        const checkbox = await captchaFrame.$('input[type="checkbox"]');
+        if (checkbox) {
+            await checkbox.click();
+            console.log('✅ Captcha checkbox clickeado dentro del iframe');
+            // Esperar a que se resuelva
+            await page.waitForTimeout(8000);
+            return true;
+        } else {
+            // Buscar por aria-label
+            const checkbox2 = await captchaFrame.$('[role="checkbox"]');
+            if (checkbox2) {
+                await checkbox2.click();
+                console.log('✅ Captcha role="checkbox" clickeado');
+                await page.waitForTimeout(8000);
+                return true;
+            }
+        }
+    } catch (e) {
+        console.log('❌ Error al interactuar con captcha:', e.message);
+        return false;
+    }
+    return false;
+}
+
+// ========== VERIFICAR UNA TARJETA (con tiempos exagerados) ==========
 async function verificarTarjetaUnica(cardData, amount, direccion, page = null, isFirstCard = false) {
     const [numero, mes, año, cvv] = cardData.split('|');
     const mesFormateado = mes.padStart(2, '0');
@@ -224,16 +328,18 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             currentPage = await getNewPage();
             console.log(`🔍 Navegando a ${TARGET_URL}...`);
             await currentPage.goto(TARGET_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 60000,
+                waitUntil: 'networkidle0',
+                timeout: 120000,
                 ignoreHTTPSErrors: true
             });
+            // Espera extra para que cargue todo
+            await currentPage.waitForTimeout(5000);
 
             // ---- LLENAR MONTO ----
             console.log('⏳ Buscando campo de monto...');
             let montoFound = false;
             const montoSelector = 'input[data-cy="gift-amount-input-0"]';
-            if (await waitForSelector(currentPage, montoSelector, 15000)) {
+            if (await waitForSelector(currentPage, montoSelector, 30000)) {
                 await currentPage.click(montoSelector, { clickCount: 3 });
                 await currentPage.type(montoSelector, amount);
                 console.log('✅ Monto (data-cy)');
@@ -241,7 +347,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             }
             if (!montoFound) {
                 const fallback = 'input[placeholder="0.00"]';
-                if (await waitForSelector(currentPage, fallback, 5000)) {
+                if (await waitForSelector(currentPage, fallback, 30000)) {
                     await currentPage.click(fallback, { clickCount: 3 });
                     await currentPage.type(fallback, amount);
                     console.log('✅ Monto (placeholder)');
@@ -298,10 +404,10 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
 
             // ---- ADD PAYMENT METHOD ----
             const continueBtn = '[data-cy="gift-continue-to-payment-btn"]';
-            if (await waitForSelector(currentPage, continueBtn, 10000)) {
+            if (await waitForSelector(currentPage, continueBtn, 30000)) {
                 await currentPage.click(continueBtn);
                 console.log('✅ Add Payment Method');
-                await currentPage.waitForTimeout(3000);
+                await currentPage.waitForTimeout(5000);
             } else {
                 console.log('⚠️ Add Payment Method no encontrado, asumiendo que ya estamos en pago');
             }
@@ -314,27 +420,27 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             console.log('⚠️ Página perdida, creando nueva...');
             currentPage = await getNewPage();
             await currentPage.goto(TARGET_URL, {
-                waitUntil: 'domcontentloaded',
-                timeout: 60000,
+                waitUntil: 'networkidle0',
+                timeout: 120000,
                 ignoreHTTPSErrors: true
             });
             return await verificarTarjetaUnica(cardData, amount, direccion, currentPage, true);
         }
-        await currentPage.waitForTimeout(3000);
+        await currentPage.waitForTimeout(5000);
 
         // ---- SELECCIONAR CARD ----
         const cardBtn = '[data-cy="payment-type-card-btn"]';
-        if (await waitForSelector(currentPage, cardBtn, 10000)) {
+        if (await waitForSelector(currentPage, cardBtn, 30000)) {
             const isActive = await currentPage.$eval(cardBtn, el => el.classList.contains('active'));
             if (!isActive) {
                 await currentPage.click(cardBtn);
                 console.log('✅ Card seleccionado');
-                await currentPage.waitForTimeout(3000);
+                await currentPage.waitForTimeout(5000);
             }
         } else {
             try {
                 await currentPage.click('text=Card');
-                await currentPage.waitForTimeout(3000);
+                await currentPage.waitForTimeout(5000);
             } catch (e) {
                 console.log('⚠️ No se pudo seleccionar Card');
             }
@@ -348,7 +454,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             await llenarDireccion(currentPage, direccion);
         } else {
             console.log('⚠️ Saltando dirección (ya guardada)');
-            await currentPage.waitForTimeout(3000);
+            await currentPage.waitForTimeout(5000);
         }
 
         // ---- REVIEW DETAILS (con reintentos) ----
@@ -365,7 +471,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
                     break;
                 }
             } catch (e) {}
-            await currentPage.waitForTimeout(1500);
+            await currentPage.waitForTimeout(3000);
         }
         if (!reviewClicked) {
             await currentPage.evaluate((sel) => {
@@ -375,117 +481,57 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             console.log('✅ Review Details forzado');
         }
 
-        // ---- ESPERA DE 5 SEGUNDOS ----
-        console.log('⏳ Esperando 5 segundos...');
-        await currentPage.waitForTimeout(5000);
+        // ---- ESPERA DE 15 SEGUNDOS (exagerado) ----
+        console.log('⏳ Esperando 15 segundos para que cargue el captcha...');
+        await currentPage.waitForTimeout(15000);
 
+        // ---- CAPTCHA (resolver) ----
+        const captchaResuelto = await resolverCaptcha(currentPage);
+        if (!captchaResuelto) {
+            console.log('⚠️ No se pudo resolver captcha, continuando de todos modos...');
+        }
 
-                // ---- UNABLE TO PROCESS ----
+        // ---- ESPERA ADICIONAL DESPUÉS DE CAPTCHA ----
+        await currentPage.waitForTimeout(10000);
+
+        // ---- VERIFICAR UNABLE TO PROCESS ----
         const bodyText = await currentPage.evaluate(() => document.body.innerText);
         if (bodyText.includes('UNABLE TO PROCESS')) {
             console.log('⚠️ UNABLE TO PROCESS');
             const backBtn = '[data-cy="review-back-btn"]';
-            if (await waitForSelector(currentPage, backBtn, 3000)) {
+            if (await waitForSelector(currentPage, backBtn, 30000)) {
                 await currentPage.click(backBtn);
-                await currentPage.waitForTimeout(2000);
+                await currentPage.waitForTimeout(3000);
             }
             return { resultado: 'unable', mensaje: 'UNABLE TO PROCESS', isUnable: true, page: currentPage };
         }
 
-        // ---- CAPTCHA (Cloudflare Turnstile) ----
-        console.log('🔍 Buscando captcha de Cloudflare...');
-        
-        // 1. Buscar en todos los frames
-        let captchaFound = false;
-        const frames = currentPage.frames();
-        for (const f of frames) {
-            try {
-                // Selectores comunes de Cloudflare Turnstile
-                const selectors = [
-                    'input[type="checkbox"][aria-label="Verifique que es un ser humano"]',
-                    'input[type="checkbox"][aria-label="Verify you are human"]',
-                    'iframe[src*="turnstile"]',
-                    '.cf-turnstile',
-                    '.g-recaptcha'
-                ];
-                for (const sel of selectors) {
-                    const exists = await f.$(sel);
-                    if (exists) {
-                        captchaFound = true;
-                        console.log(`✅ Captcha encontrado en frame con selector: ${sel}`);
-                        
-                        // Si es un iframe, buscar dentro de él
-                        if (sel.includes('iframe')) {
-                            const iframeElement = exists;
-                            const iframeContent = await iframeElement.contentFrame();
-                            if (iframeContent) {
-                                const checkbox = await iframeContent.$('input[type="checkbox"]');
-                                if (checkbox) {
-                                    await checkbox.click();
-                                    console.log('✅ Clic en checkbox del iframe');
-                                }
-                            }
-                        } else {
-                            // Es un checkbox directo
-                            await f.click(sel);
-                            console.log(`✅ Clic en ${sel}`);
-                        }
-                        break;
-                    }
-                }
-                if (captchaFound) break;
-            } catch (e) {}
-        }
-
-        if (captchaFound) {
-            console.log('⏳ Esperando resolución del captcha (5s)...');
-            await currentPage.waitForTimeout(5000);
-        } else {
-            console.log('⚠️ No se encontró captcha (puede que ya esté resuelto o no sea necesario)');
-        }
-
-        // ---- Esperar a que el botón Give se habilite (con reintentos) ----
+        // ---- BOTÓN GIVE (esperar hasta 60 segundos) ----
         const giveBtn = '[data-cy="review-submit-btn"]';
         const backBtn = '[data-cy="review-back-btn"]';
 
-        let giveEnabled = false;
-        for (let attempt = 0; attempt < 4; attempt++) {
-            console.log(`🔄 Verificando botón Give (intento ${attempt+1}/4)...`);
-            try {
-                const isEnabled = await currentPage.evaluate((sel) => {
+        try {
+            await currentPage.waitForFunction(
+                (sel) => {
                     const btn = document.querySelector(sel);
-                    if (!btn) return false;
-                    return !btn.classList.contains('disabled') && !btn.disabled;
-                }, giveBtn);
-                if (isEnabled) {
-                    giveEnabled = true;
-                    console.log('✅ Botón Give habilitado');
-                    break;
-                }
-            } catch (e) {}
-            await currentPage.waitForTimeout(3000);
+                    return btn && !btn.classList.contains('disabled') && !btn.disabled;
+                },
+                { timeout: 60000 },
+                giveBtn
+            );
+            console.log('✅ Botón Give habilitado');
+            await currentPage.click(giveBtn);
+            await currentPage.waitForTimeout(10000);
+        } catch (e) {
+            console.log('⏳ Give no habilitado después de 60s, Back...');
+            if (await waitForSelector(currentPage, backBtn, 30000)) {
+                await currentPage.click(backBtn);
+                await currentPage.waitForTimeout(3000);
+                return { resultado: 'declined', mensaje: 'Give timeout', isUnable: false, page: currentPage };
+            }
+            return { resultado: 'error', mensaje: 'No se encontró Give ni Back', isUnable: false, page: currentPage };
         }
 
-        if (giveEnabled) {
-            await currentPage.click(giveBtn);
-            console.log('✅ Clic en Give');
-            await currentPage.waitForTimeout(3000);
-        } else {
-            console.log('⏳ Botón Give no habilitado, intentando clic de todas formas...');
-            try {
-                await currentPage.click(giveBtn);
-                console.log('✅ Clic en Give (forzado)');
-                await currentPage.waitForTimeout(3000);
-            } catch (e) {
-                console.log('⏳ Give no clickeable, Back...');
-                if (await waitForSelector(currentPage, backBtn, 3000)) {
-                    await currentPage.click(backBtn);
-                    await currentPage.waitForTimeout(2000);
-                    return { resultado: 'declined', mensaje: 'Give timeout', isUnable: false, page: currentPage };
-                }
-                return { resultado: 'error', mensaje: 'No se encontró Give ni Back', isUnable: false, page: currentPage };
-            }
-        }
         // ---- RESULTADO FINAL ----
         const finalText = await currentPage.evaluate(() => document.body.innerText);
 
@@ -494,17 +540,17 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             return { resultado: 'approved', mensaje: 'Donación exitosa', screenshot, isUnable: false, page: currentPage };
         } else if (finalText.includes('GIFT FAILED') || finalText.includes('Please verify your payment information')) {
             console.log('❌ GIFT FAILED, Back...');
-            if (await waitForSelector(currentPage, backBtn, 3000)) {
+            if (await waitForSelector(currentPage, backBtn, 30000)) {
                 await currentPage.click(backBtn);
-                await currentPage.waitForTimeout(2000);
+                await currentPage.waitForTimeout(3000);
                 return { resultado: 'declined', mensaje: 'GIFT FAILED', isUnable: false, page: currentPage };
             }
             return { resultado: 'declined', mensaje: 'GIFT FAILED', isUnable: false, page: currentPage };
         } else {
             console.log('⚠️ Respuesta desconocida, Back...');
-            if (await waitForSelector(currentPage, backBtn, 3000)) {
+            if (await waitForSelector(currentPage, backBtn, 30000)) {
                 await currentPage.click(backBtn);
-                await currentPage.waitForTimeout(2000);
+                await currentPage.waitForTimeout(3000);
                 return { resultado: 'error', mensaje: 'Respuesta desconocida', isUnable: false, page: currentPage };
             }
             return { resultado: 'error', mensaje: 'Respuesta desconocida', isUnable: false, page: currentPage };
@@ -580,7 +626,6 @@ app.post('/api/check-cards', async (req, res) => {
             unableConsecutivos = 0;
         }
 
-        // Asegurar campo isUnable para el front
         if (!resultado.hasOwnProperty('isUnable')) {
             resultado.isUnable = false;
         }
