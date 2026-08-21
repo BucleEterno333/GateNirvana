@@ -11,8 +11,8 @@ app.use(express.json({ limit: '10mb' }));
 const PORT = process.env.PORT || 3000;
 const PROXY_STRING = process.env.PROXY_STRING || '';
 const TARGET_URL = process.env.TARGET_URL || 'https://braveacademy.org/give-now-aca';
-const HEADLESS = process.env.HEADLESS !== 'false'; // true por defecto
-
+const HEADLESS = process.env.HEADLESS === 'false' ? false : 
+                 process.env.HEADLESS === 'new' ? 'new' : true;
 let browser = null;
 let page = null;
 
@@ -41,18 +41,32 @@ async function getNewPage() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-accelerated-2d-canvas',
-        '--disable-gpu'
+        '--disable-gpu',
+        '--disable-software-rasterizer'
     ];
     if (proxyData) {
         args.push(`--proxy-server=${proxyData.host}:${proxyData.port}`);
     }
 
-    // Usar headless: "new" para evitar warning y mejorar compatibilidad
-    browser = await puppeteer.launch({
-        headless: HEADLESS === 'new' ? 'new' : HEADLESS === 'true' ? true : false,
+    // Asegurar que el modo headless se pase correctamente
+    const launchOptions = {
+        headless: HEADLESS,
         args: args,
         ignoreHTTPSErrors: true
-    });
+    };
+
+    // Si HEADLESS es 'new', no necesitamos --headless flag, pero añadimos para seguridad
+    if (HEADLESS === 'new') {
+        args.push('--headless=new');
+    }
+
+    try {
+        browser = await puppeteer.launch(launchOptions);
+    } catch (error) {
+        console.error('❌ Error al lanzar Chromium:', error.message);
+        console.error('Args:', args);
+        throw error;
+    }
 
     page = await browser.newPage();
 

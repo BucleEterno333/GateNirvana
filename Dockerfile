@@ -2,8 +2,9 @@ FROM node:18-slim
 
 WORKDIR /app
 
-# Instalar todas las dependencias necesarias para Chromium
+# Instalar Chromium y dependencias
 RUN apt-get update && apt-get install -y \
+    chromium \
     wget \
     gnupg \
     ca-certificates \
@@ -44,20 +45,18 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Copiar package.json e instalar dependencias
+# Definir la ruta de Chromium para Puppeteer
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Copiar dependencias y código
 COPY package*.json ./
 RUN npm install
 
-# Copiar el código
 COPY . .
-
-# Instalar Chromium para Puppeteer (opcional, pero asegura)
-RUN npx puppeteer browsers install chrome
 
 EXPOSE 3000
 
 ENV PORT=3000
-ENV HEADLESS=true
+ENV HEADLESS=new
 
-# Iniciar la app
 CMD ["node", "server.js"]
