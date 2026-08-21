@@ -1,12 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const puppeteer = require('puppeteer');
 const { faker } = require('@faker-js/faker');
-
-// Aplicar el plugin stealth para evitar detección
-puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
@@ -31,10 +27,9 @@ async function waitForSelector(page, selector, timeout = 15000) {
     }
 }
 
-// ========== PROXY ==========
+// ========== PROXY (autenticación separada) ==========
 function parseProxy(proxyStr) {
     if (!proxyStr) return null;
-    // Formato: user:pass@host:port
     const match = proxyStr.match(/^(.*?):(.*?)@(.*?):(\d+)$/);
     if (match) {
         return {
@@ -47,7 +42,7 @@ function parseProxy(proxyStr) {
     return null;
 }
 
-// ========== CREAR PÁGINA CON PROXY (autenticación separada) ==========
+// ========== CREAR PÁGINA CON PROXY ==========
 async function getNewPage() {
     if (browser) {
         await browser.close();
@@ -214,7 +209,7 @@ async function rellenarDatosTarjeta(page, numero, expira, cvv) {
     console.log('✅ Tarjeta ingresada');
 }
 
-// ========== VERIFICAR UNA TARJETA (CON REINTENTO INTERNO) ==========
+// ========== VERIFICAR UNA TARJETA (para endpoint individual) ==========
 async function verificarTarjetaUnica(cardData, amount, direccion, page = null, isFirstCard = false) {
     const [numero, mes, año, cvv] = cardData.split('|');
     const mesFormateado = mes.padStart(2, '0');
@@ -311,7 +306,6 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
                 console.log('⚠️ Add Payment Method no encontrado, asumiendo que ya estamos en pago');
             }
         } else {
-            // ---- TARJETAS SIGUIENTES: usar la misma página (ya tiene dirección) ----
             console.log('🔄 Usando página existente para siguiente tarjeta...');
         }
 
@@ -430,9 +424,9 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             if (await waitForSelector(currentPage, backBtn, 3000)) {
                 await currentPage.click(backBtn);
                 await currentPage.waitForTimeout(2000);
-                return { resultado: 'declined', mensaje: 'Give timeout', page: currentPage };
+                return { resultado: 'declined', mensaje: 'Give timeout', isUnable: false, page: currentPage };
             }
-            return { resultado: 'error', mensaje: 'No se encontró Give ni Back', page: currentPage };
+            return { resultado: 'error', mensaje: 'No se encontró Give ni Back', isUnable: false, page: currentPage };
         }
 
         // ---- RESULTADO FINAL ----
@@ -440,30 +434,46 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
 
         if (finalText.includes('Thank You')) {
             const screenshot = await currentPage.screenshot({ encoding: 'base64', fullPage: true });
-            return { resultado: 'approved', mensaje: 'Donación exitosa', screenshot, page: currentPage };
+            return { resultado: 'approved', mensaje: 'Donación exitosa', screenshot, isUnable: false, page: currentPage };
         } else if (finalText.includes('GIFT FAILED') || finalText.includes('Please verify your payment information')) {
             console.log('❌ GIFT FAILED, Back...');
             if (await waitForSelector(currentPage, backBtn, 3000)) {
                 await currentPage.click(backBtn);
                 await currentPage.waitForTimeout(2000);
-                return { resultado: 'declined', mensaje: 'GIFT FAILED', page: currentPage };
+                return { resultado: 'declined', mensaje: 'GIFT FAILED', isUnable: false, page: currentPage };
             }
-            return { resultado: 'declined', mensaje: 'GIFT FAILED', page: currentPage };
+            return { resultado: 'declined', mensaje: 'GIFT FAILED', isUnable: false, page: currentPage };
         } else {
             console.log('⚠️ Respuesta desconocida, Back...');
             if (await waitForSelector(currentPage, backBtn, 3000)) {
                 await currentPage.click(backBtn);
                 await currentPage.waitForTimeout(2000);
-                return { resultado: 'error', mensaje: 'Respuesta desconocida', page: currentPage };
+                return { resultado: 'error', mensaje: 'Respuesta desconocida', isUnable: false, page: currentPage };
             }
-            return { resultado: 'error', mensaje: 'Respuesta desconocida', page: currentPage };
+            return { resultado: 'error', mensaje: 'Respuesta desconocida', isUnable: false, page: currentPage };
         }
 
     } catch (error) {
         console.error('Error en verificación:', error);
-        return { resultado: 'error', mensaje: error.message, page: page };
+        return { resultado: 'error', mensaje: error.message, isUnable: false, page: page };
     }
 }
+
+// ========== ENDPOINT PARA UNA SOLA TARJETA ==========
+app.post('/api/check-card', async (req, res) => {
+    const { card, amount } = req.body;
+    if (!card || !amount) {
+        return res.status(400).json({ error: 'Faltan datos' });
+    }
+    try {
+        const direccion = generarDireccion();
+        const resultado = await verificarTarjetaUnica(card, amount, direccion, null, true);
+        res.json(resultado);
+    } catch (e) {
+        console.error('Endpoint error:', e);
+        res.status(500).json({ resultado: 'error', mensaje: e.message });
+    }
+});
 
 // ========== ENDPOINT PARA MÚLTIPLES TARJETAS ==========
 app.post('/api/check-cards', async (req, res) => {
@@ -511,6 +521,11 @@ app.post('/api/check-cards', async (req, res) => {
             }
         } else {
             unableConsecutivos = 0;
+        }
+
+        // Asegurar campo isUnable para el front
+        if (!resultado.hasOwnProperty('isUnable')) {
+            resultado.isUnable = false;
         }
 
         resultados.push({ card, resultado });
