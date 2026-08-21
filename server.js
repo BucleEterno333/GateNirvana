@@ -407,7 +407,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             console.log(`🔍 Navegando a ${TARGET_URL}...`);
             await currentPage.goto(TARGET_URL, {
                 waitUntil: 'networkidle0',
-                timeout: 120000,
+                timeout: 600000,
                 ignoreHTTPSErrors: true
             });
             // Espera extra para que cargue todo
@@ -737,3 +737,8 @@ app.get('/api/health', (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Nirvana backend corriendo en puerto ${PORT}`);
 });
+
+// Timeouts extendidos (10 minutos)
+server.timeout = 600000;
+server.keepAliveTimeout = 600000;
+server.headersTimeout = 600000;
