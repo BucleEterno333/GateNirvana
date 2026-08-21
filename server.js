@@ -734,7 +734,7 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`🚀 Nirvana backend corriendo en puerto ${PORT}`);
 });
 
