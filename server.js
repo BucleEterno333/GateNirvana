@@ -230,7 +230,7 @@ async function rellenarDatosTarjeta(page, numero, expira, cvv) {
     console.log(`📦 Frame de pago: ${cardFrame ? 'encontrado' : 'no encontrado, usando página principal'}`);
 
     const numSel = 'input.cc-input, input[placeholder*="Card Number"], input[data-elements-stable-field-name="cardNumber"], input[name="cardnumber"]';
-    if (await waitForSelector(target, numSel, 30000)) {
+    if (await waitForSelector(target, numSel, 300000)) {
         await target.click(numSel, { clickCount: 3 });
         await target.type(numSel, numero);
     } else {
@@ -238,7 +238,7 @@ async function rellenarDatosTarjeta(page, numero, expira, cvv) {
     }
 
     const expSel = 'input.exp-input, input[placeholder*="MM/YY"], input[data-elements-stable-field-name="cardExpiry"], input[name="expiry"]';
-    if (await waitForSelector(target, expSel, 30000)) {
+    if (await waitForSelector(target, expSel, 300000)) {
         await target.click(expSel, { clickCount: 3 });
         await target.type(expSel, expira);
     } else {
@@ -246,7 +246,7 @@ async function rellenarDatosTarjeta(page, numero, expira, cvv) {
     }
 
     const cvvSel = 'input.cvv-input, input[placeholder*="CVV"], input[data-elements-stable-field-name="cardCvc"], input[name="cvv"]';
-    if (await waitForSelector(target, cvvSel, 30000)) {
+    if (await waitForSelector(target, cvvSel, 300000)) {
         await target.click(cvvSel, { clickCount: 3 });
         await target.type(cvvSel, cvv);
     } else {
@@ -339,7 +339,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             console.log('⏳ Buscando campo de monto...');
             let montoFound = false;
             const montoSelector = 'input[data-cy="gift-amount-input-0"]';
-            if (await waitForSelector(currentPage, montoSelector, 30000)) {
+            if (await waitForSelector(currentPage, montoSelector, 300000)) {
                 await currentPage.click(montoSelector, { clickCount: 3 });
                 await currentPage.type(montoSelector, amount);
                 console.log('✅ Monto (data-cy)');
@@ -347,7 +347,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             }
             if (!montoFound) {
                 const fallback = 'input[placeholder="0.00"]';
-                if (await waitForSelector(currentPage, fallback, 30000)) {
+                if (await waitForSelector(currentPage, fallback, 300000)) {
                     await currentPage.click(fallback, { clickCount: 3 });
                     await currentPage.type(fallback, amount);
                     console.log('✅ Monto (placeholder)');
@@ -404,7 +404,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
 
             // ---- ADD PAYMENT METHOD ----
             const continueBtn = '[data-cy="gift-continue-to-payment-btn"]';
-            if (await waitForSelector(currentPage, continueBtn, 30000)) {
+            if (await waitForSelector(currentPage, continueBtn, 300000)) {
                 await currentPage.click(continueBtn);
                 console.log('✅ Add Payment Method');
                 await currentPage.waitForTimeout(5000);
@@ -430,7 +430,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
 
         // ---- SELECCIONAR CARD ----
         const cardBtn = '[data-cy="payment-type-card-btn"]';
-        if (await waitForSelector(currentPage, cardBtn, 30000)) {
+        if (await waitForSelector(currentPage, cardBtn, 300000)) {
             const isActive = await currentPage.$eval(cardBtn, el => el.classList.contains('active'));
             if (!isActive) {
                 await currentPage.click(cardBtn);
@@ -499,7 +499,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
         if (bodyText.includes('UNABLE TO PROCESS')) {
             console.log('⚠️ UNABLE TO PROCESS');
             const backBtn = '[data-cy="review-back-btn"]';
-            if (await waitForSelector(currentPage, backBtn, 30000)) {
+            if (await waitForSelector(currentPage, backBtn, 300000)) {
                 await currentPage.click(backBtn);
                 await currentPage.waitForTimeout(3000);
             }
@@ -524,7 +524,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             await currentPage.waitForTimeout(10000);
         } catch (e) {
             console.log('⏳ Give no habilitado después de 60s, Back...');
-            if (await waitForSelector(currentPage, backBtn, 30000)) {
+            if (await waitForSelector(currentPage, backBtn, 300000)) {
                 await currentPage.click(backBtn);
                 await currentPage.waitForTimeout(3000);
                 return { resultado: 'declined', mensaje: 'Give timeout', isUnable: false, page: currentPage };
@@ -540,7 +540,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             return { resultado: 'approved', mensaje: 'Donación exitosa', screenshot, isUnable: false, page: currentPage };
         } else if (finalText.includes('GIFT FAILED') || finalText.includes('Please verify your payment information')) {
             console.log('❌ GIFT FAILED, Back...');
-            if (await waitForSelector(currentPage, backBtn, 30000)) {
+            if (await waitForSelector(currentPage, backBtn, 300000)) {
                 await currentPage.click(backBtn);
                 await currentPage.waitForTimeout(3000);
                 return { resultado: 'declined', mensaje: 'GIFT FAILED', isUnable: false, page: currentPage };
@@ -548,7 +548,7 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             return { resultado: 'declined', mensaje: 'GIFT FAILED', isUnable: false, page: currentPage };
         } else {
             console.log('⚠️ Respuesta desconocida, Back...');
-            if (await waitForSelector(currentPage, backBtn, 30000)) {
+            if (await waitForSelector(currentPage, backBtn, 300000)) {
                 await currentPage.click(backBtn);
                 await currentPage.waitForTimeout(3000);
                 return { resultado: 'error', mensaje: 'Respuesta desconocida', isUnable: false, page: currentPage };
