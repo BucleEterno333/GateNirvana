@@ -139,13 +139,14 @@ async function verificarTarjeta(cardData, amount) {
             // Esperar un poco para que el DOM cargue completamente
             await page.waitForTimeout(2000);
 
-            // 2. Llenar monto - usar data-cy
+            // 2. Llenar monto - usar data-cy (más estable que el ID dinámico)
             const montoSelector = 'input[data-cy="gift-amount-input-0"]';
+            // Esperar hasta 30 segundos a que aparezca
             if (await waitForSelector(page, montoSelector, 30000)) {
                 await page.click(montoSelector, { clickCount: 3 });
                 await page.type(montoSelector, amount);
             } else {
-                // Fallback por placeholder
+                // Fallback: buscar por placeholder
                 const fallback = 'input[placeholder="0.00"]';
                 if (await waitForSelector(page, fallback, 5000)) {
                     await page.click(fallback, { clickCount: 3 });
