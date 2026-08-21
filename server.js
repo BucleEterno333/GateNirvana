@@ -379,19 +379,8 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
         console.log('⏳ Esperando 5 segundos...');
         await currentPage.waitForTimeout(5000);
 
-        // ---- CAPTCHA ----
-        console.log('🔍 Buscando captcha...');
-        const captchaSelector = 'input[type="checkbox"][aria-label="Verifique que es un ser humano"]';
-        const captchaExists = await currentPage.$(captchaSelector);
-        if (captchaExists) {
-            console.log('✅ Captcha detectado, clic...');
-            await currentPage.click(captchaSelector);
-            await currentPage.waitForTimeout(5000);
-        } else {
-            console.log('⚠️ No se encontró captcha');
-        }
 
-        // ---- UNABLE TO PROCESS ----
+                // ---- UNABLE TO PROCESS ----
         const bodyText = await currentPage.evaluate(() => document.body.innerText);
         if (bodyText.includes('UNABLE TO PROCESS')) {
             console.log('⚠️ UNABLE TO PROCESS');
@@ -403,32 +392,100 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
             return { resultado: 'unable', mensaje: 'UNABLE TO PROCESS', isUnable: true, page: currentPage };
         }
 
-        // ---- BOTÓN GIVE ----
+        // ---- CAPTCHA (Cloudflare Turnstile) ----
+        console.log('🔍 Buscando captcha de Cloudflare...');
+        
+        // 1. Buscar en todos los frames
+        let captchaFound = false;
+        const frames = currentPage.frames();
+        for (const f of frames) {
+            try {
+                // Selectores comunes de Cloudflare Turnstile
+                const selectors = [
+                    'input[type="checkbox"][aria-label="Verifique que es un ser humano"]',
+                    'input[type="checkbox"][aria-label="Verify you are human"]',
+                    'iframe[src*="turnstile"]',
+                    '.cf-turnstile',
+                    '.g-recaptcha'
+                ];
+                for (const sel of selectors) {
+                    const exists = await f.$(sel);
+                    if (exists) {
+                        captchaFound = true;
+                        console.log(`✅ Captcha encontrado en frame con selector: ${sel}`);
+                        
+                        // Si es un iframe, buscar dentro de él
+                        if (sel.includes('iframe')) {
+                            const iframeElement = exists;
+                            const iframeContent = await iframeElement.contentFrame();
+                            if (iframeContent) {
+                                const checkbox = await iframeContent.$('input[type="checkbox"]');
+                                if (checkbox) {
+                                    await checkbox.click();
+                                    console.log('✅ Clic en checkbox del iframe');
+                                }
+                            }
+                        } else {
+                            // Es un checkbox directo
+                            await f.click(sel);
+                            console.log(`✅ Clic en ${sel}`);
+                        }
+                        break;
+                    }
+                }
+                if (captchaFound) break;
+            } catch (e) {}
+        }
+
+        if (captchaFound) {
+            console.log('⏳ Esperando resolución del captcha (5s)...');
+            await currentPage.waitForTimeout(5000);
+        } else {
+            console.log('⚠️ No se encontró captcha (puede que ya esté resuelto o no sea necesario)');
+        }
+
+        // ---- Esperar a que el botón Give se habilite (con reintentos) ----
         const giveBtn = '[data-cy="review-submit-btn"]';
         const backBtn = '[data-cy="review-back-btn"]';
 
-        try {
-            await currentPage.waitForFunction(
-                (sel) => {
+        let giveEnabled = false;
+        for (let attempt = 0; attempt < 4; attempt++) {
+            console.log(`🔄 Verificando botón Give (intento ${attempt+1}/4)...`);
+            try {
+                const isEnabled = await currentPage.evaluate((sel) => {
                     const btn = document.querySelector(sel);
-                    return btn && !btn.classList.contains('disabled') && !btn.disabled;
-                },
-                { timeout: 15000 },
-                giveBtn
-            );
-            console.log('✅ Botón Give habilitado');
-            await currentPage.click(giveBtn);
+                    if (!btn) return false;
+                    return !btn.classList.contains('disabled') && !btn.disabled;
+                }, giveBtn);
+                if (isEnabled) {
+                    giveEnabled = true;
+                    console.log('✅ Botón Give habilitado');
+                    break;
+                }
+            } catch (e) {}
             await currentPage.waitForTimeout(3000);
-        } catch (e) {
-            console.log('⏳ Give no habilitado, Back...');
-            if (await waitForSelector(currentPage, backBtn, 3000)) {
-                await currentPage.click(backBtn);
-                await currentPage.waitForTimeout(2000);
-                return { resultado: 'declined', mensaje: 'Give timeout', isUnable: false, page: currentPage };
-            }
-            return { resultado: 'error', mensaje: 'No se encontró Give ni Back', isUnable: false, page: currentPage };
         }
 
+        if (giveEnabled) {
+            await currentPage.click(giveBtn);
+            console.log('✅ Clic en Give');
+            await currentPage.waitForTimeout(3000);
+        } else {
+            console.log('⏳ Botón Give no habilitado, intentando clic de todas formas...');
+            try {
+                await currentPage.click(giveBtn);
+                console.log('✅ Clic en Give (forzado)');
+                await currentPage.waitForTimeout(3000);
+            } catch (e) {
+                console.log('⏳ Give no clickeable, Back...');
+                if (await waitForSelector(currentPage, backBtn, 3000)) {
+                    await currentPage.click(backBtn);
+                    await currentPage.waitForTimeout(2000);
+                    return { resultado: 'declined', mensaje: 'Give timeout', isUnable: false, page: currentPage };
+                }
+                return { resultado: 'error', mensaje: 'No se encontró Give ni Back', isUnable: false, page: currentPage };
+            }
+        }
         // ---- RESULTADO FINAL ----
         const finalText = await currentPage.evaluate(() => document.body.innerText);
 
