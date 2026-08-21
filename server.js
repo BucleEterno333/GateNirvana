@@ -403,21 +403,20 @@ async function verificarTarjetaUnica(cardData, amount, direccion, page = null, i
 
         // ---- PRIMERA TARJETA: crear página y navegar ----
         if (isFirstCard) {
-            currentPage = await getNewPage();
             console.log(`🔍 Navegando a ${TARGET_URL}...`);
             await currentPage.goto(TARGET_URL, {
-                waitUntil: 'networkidle0',
-                timeout: 600000,
+                waitUntil: 'networkidle2',
+                timeout: 60000,
                 ignoreHTTPSErrors: true
             });
-            // Espera extra para que cargue todo
-            await currentPage.waitForTimeout(5000);
+            console.log('✅ Página cargada (networkidle2), esperando 10 segundos...');
+            await currentPage.waitForTimeout(10000);
 
             // ---- LLENAR MONTO ----
             console.log('⏳ Buscando campo de monto...');
             let montoFound = false;
             const montoSelector = 'input[data-cy="gift-amount-input-0"]';
-            if (await waitForSelector(currentPage, montoSelector, 600000)) {
+            if (await waitForSelector(currentPage, montoSelector, 30000)) {
                 await currentPage.click(montoSelector, { clickCount: 3 });
                 await currentPage.type(montoSelector, amount);
                 console.log('✅ Monto (data-cy)');
