@@ -115,11 +115,8 @@ async function waitForSelector(page, selector, timeout = 30000) {
 
 // ---------- Función principal de verificación ----------
 async function verificarTarjeta(cardData, amount) {
-    // cardData: "numero|mes|año|cvv"
     const [numero, mes, año, cvv] = cardData.split('|');
     const direccion = generarDireccion();
-
-    // Ajustar mes/año para el formato MM/YY (por si vienen como 05/2029 o 05/29)
     const mesFormateado = mes.padStart(2, '0');
     const añoCorto = año.slice(-2);
     const expira = `${mesFormateado}/${añoCorto}`;
@@ -133,15 +130,29 @@ async function verificarTarjeta(cardData, amount) {
             console.log(`🔍 Navegando a ${TARGET_URL}... (intento ${intentos+1})`);
 
             // 1. Ir a la página
-            await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+            await page.goto(TARGET_URL, {
+                waitUntil: 'networkidle2',
+                timeout: 60000,
+                ignoreHTTPSErrors: true
+            });
 
-            // 2. Llenar monto
-            const montoSelector = '#rock-numberbox-c953fc55-c9b0-404b-a52a-929ee9424439';
-            if (await waitForSelector(page, montoSelector, 15000)) {
+            // Esperar un poco para que el DOM cargue completamente
+            await page.waitForTimeout(2000);
+
+            // 2. Llenar monto - usar data-cy
+            const montoSelector = 'input[data-cy="gift-amount-input-0"]';
+            if (await waitForSelector(page, montoSelector, 30000)) {
                 await page.click(montoSelector, { clickCount: 3 });
                 await page.type(montoSelector, amount);
             } else {
-                throw new Error('No se encontró el campo de monto');
+                // Fallback por placeholder
+                const fallback = 'input[placeholder="0.00"]';
+                if (await waitForSelector(page, fallback, 5000)) {
+                    await page.click(fallback, { clickCount: 3 });
+                    await page.type(fallback, amount);
+                } else {
+                    throw new Error('No se encontró el campo de monto');
+                }
             }
 
             // 3. Seleccionar método de pago "Card" si no está activo
